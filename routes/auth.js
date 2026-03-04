@@ -9,6 +9,19 @@ require('dotenv').config();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'secret';
 
+async function getValidInvitation(token, email) {
+  const inv = await db.query('SELECT * FROM invitations WHERE token=$1 AND accepted=false', [token]);
+  if (inv.rowCount !== 1) return { ok: false, error: 'Invalid invitation token' };
+  const invitation = inv.rows[0];
+  if (invitation.expires_at && new Date(invitation.expires_at) < new Date()) {
+    return { ok: false, error: 'Invitation expired' };
+  }
+  if (email && invitation.email.toLowerCase() !== email.toLowerCase()) {
+    return { ok: false, error: 'Invitation email mismatch' };
+  }
+  return { ok: true, invitation };
+}
+
 router.post('/register', async (req, res) => {
   const { email, password, token } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Missing fields' });
@@ -18,19 +31,50 @@ router.post('/register', async (req, res) => {
     let role = 'user';
     let region_id = null;
     if (token) {
-      const inv = await db.query('SELECT * FROM invitations WHERE token=$1 AND accepted=false', [token]);
-      if (inv.rowCount === 1) {
-        role = inv.rows[0].role;
-        region_id = inv.rows[0].region_id;
-        await db.query('UPDATE invitations SET accepted=true WHERE id=$1', [inv.rows[0].id]);
-      }
+      const invResult = await getValidInvitation(token, email);
+      if (!invResult.ok) return res.status(400).json({ error: invResult.error });
+      role = invResult.invitation.role;
+      region_id = invResult.invitation.region_id;
+      await db.query('UPDATE invitations SET accepted=true WHERE id=$1', [invResult.invitation.id]);
     }
     const id = uuidv4();
     await db.query('INSERT INTO users(id,email,password,role) VALUES($1,$2,$3,$4)', [id, email, hashed, role]);
     if (region_id) {
       await db.query('INSERT INTO user_regions(user_id, region_id) VALUES($1,$2)', [id, region_id]);
     }
-    return res.json({ ok: true });
+    const authToken = jwt.sign({ id, email, role }, JWT_SECRET, { expiresIn: '7d' });
+    return res.json({ ok: true, token: authToken, user: { id, email, role, region_id } });
+  } catch (err) {
+    console.error(err);
+    if (err.code === '23505') return res.status(409).json({ error: 'Email already exists' });
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Accept invitation and sign in directly
+router.post('/accept-invite', async (req, res) => {
+  const { token, email, password } = req.body;
+  if (!token || !email || !password) return res.status(400).json({ error: 'Missing fields' });
+  try {
+    const invResult = await getValidInvitation(token, email);
+    if (!invResult.ok) return res.status(400).json({ error: invResult.error });
+
+    const existing = await db.query('SELECT id FROM users WHERE email=$1', [email]);
+    if (existing.rowCount > 0) return res.status(409).json({ error: 'User already exists for this email' });
+
+    const hashed = await bcrypt.hash(password, 10);
+    const id = uuidv4();
+    const role = invResult.invitation.role;
+    const region_id = invResult.invitation.region_id;
+
+    await db.query('INSERT INTO users(id,email,password,role) VALUES($1,$2,$3,$4)', [id, email, hashed, role]);
+    if (region_id) {
+      await db.query('INSERT INTO user_regions(user_id, region_id) VALUES($1,$2)', [id, region_id]);
+    }
+    await db.query('UPDATE invitations SET accepted=true WHERE id=$1', [invResult.invitation.id]);
+
+    const authToken = jwt.sign({ id, email, role }, JWT_SECRET, { expiresIn: '7d' });
+    return res.json({ ok: true, token: authToken, user: { id, email, role, region_id } });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Server error' });

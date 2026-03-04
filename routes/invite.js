@@ -46,7 +46,34 @@ router.post('/resend', authRequired, requireRole('super'), async (req, res) => {
     await db.query('UPDATE invitations SET token=$1,expires_at=$2,sent_count=sent_count+1 WHERE id=$3', [token, new Date(Date.now() + 1000 * 60 * 60 * 24 * 7), invitation_id]);
     const url = `${process.env.NEXT_PUBLIC_APP_URL}/accept-invite?token=${token}`;
     await sendMail({ to: inv.email, subject: 'Invitation (resend)', html: `<p>Accept: <a href="${url}">${url}</a></p>` });
-    return res.json({ ok: true });
+    return res.json({ ok: true, token, invitation_url: url });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Validate invitation token for frontend accept-invite page
+router.get('/validate', async (req, res) => {
+  const { token } = req.query;
+  if (!token) return res.status(400).json({ error: 'Missing token' });
+  try {
+    const invr = await db.query('SELECT id,email,role,region_id,expires_at,accepted FROM invitations WHERE token=$1', [token]);
+    if (invr.rowCount !== 1) return res.status(404).json({ error: 'Invitation not found' });
+    const inv = invr.rows[0];
+    if (inv.accepted) return res.status(400).json({ error: 'Invitation already accepted' });
+    if (inv.expires_at && new Date(inv.expires_at) < new Date()) return res.status(400).json({ error: 'Invitation expired' });
+    return res.json({
+      ok: true,
+      invitation: {
+        id: inv.id,
+        email: inv.email,
+        role: inv.role,
+        region_id: inv.region_id,
+        expires_at: inv.expires_at
+      },
+      token
+    });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Server error' });
