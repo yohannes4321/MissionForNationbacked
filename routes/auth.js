@@ -83,6 +83,23 @@ router.post('/accept-invite', async (req, res) => {
   }
 });
 
+router.post('/login', async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) return res.status(400).json({ error: 'Missing fields' });
+  try {
+    const user = await db.query('SELECT id,email,password,role FROM users WHERE email=$1', [email]);
+    if (user.rowCount !== 1) return res.status(401).json({ error: 'Invalid credentials' });
+    const valid = await bcrypt.compare(password, user.rows[0].password);
+    if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
+    const { id, email: userEmail, role } = user.rows[0];
+    const authToken = jwt.sign({ id, email: userEmail, role }, JWT_SECRET, { expiresIn: '7d' });
+    return res.json({ ok: true, token: authToken, user: { id, email: userEmail, role } });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
 router.get('/accept-invite', async (req, res) => {
   const { token } = req.query;
   if (!token) return res.status(400).send('Missing token');
@@ -161,8 +178,10 @@ router.post('/login', async (req, res) => {
     const ok = await bcrypt.compare(password, u.password);
     if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
     const token = jwt.sign({ id: u.id, email: u.email, role: u.role }, JWT_SECRET, { expiresIn: '7d' });
-    return res.json({ token });
-  } catch (err) {
+return res.json({ 
+  token, 
+  user: { id: u.id, email: u.email, role: u.role } 
+});  } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Server error' });
   }
