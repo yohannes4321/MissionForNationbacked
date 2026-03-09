@@ -496,7 +496,7 @@ router.get('/posts', async (req, res) => {
 
 // Add gallery image for region (super or regional admin)
 router.post('/galleries', authRequired, requireRole('super', 'regional_admin'), async (req, res) => {
-  const { region_id, church_id, image_url, caption, location_link, expires_in_days } = req.body;
+  const { region_id, church_id, title, type, description, image_url, caption, location_link, expires_in_days } = req.body;
   if (!region_id || !image_url) return res.status(400).json({ error: 'Missing region_id or image_url' });
 
   const rr = await db.query('SELECT id FROM regions WHERE id=$1', [region_id]);
@@ -518,13 +518,16 @@ router.post('/galleries', authRequired, requireRole('super', 'regional_admin'), 
   const id = uuidv4();
   await db.query(
     `INSERT INTO region_galleries(
-      id,author_id,region_id,church_id,caption,image_url,location_link,expires_at,created_at
-    ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,NOW())`,
+      id,author_id,region_id,church_id,title,type,description,caption,image_url,location_link,expires_at,created_at
+    ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())`,
     [
       id,
       req.user.id,
       region_id,
       church_id || null,
+      title || null,
+      type || null,
+      description || null,
       caption || null,
       image_url,
       location_link || null,
@@ -550,6 +553,9 @@ router.get('/galleries', async (req, res) => {
       g.region_id,
       g.church_id,
       c.name AS church_name,
+      g.title,
+      g.type,
+      g.description,
       g.caption,
       g.image_url,
       g.location_link,
@@ -582,6 +588,9 @@ router.get('/galleries/all', async (req, res) => {
       r.name AS region_name,
       g.church_id,
       c.name AS church_name,
+      g.title,
+      g.type,
+      g.description,
       g.caption,
       g.image_url,
       g.location_link,
