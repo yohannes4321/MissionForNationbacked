@@ -77,6 +77,11 @@ async function validateChurchIdsForRegion(churchIds, regionId) {
   return c.rowCount === uniqueChurchIds.length;
 }
 
+async function getChurchById(churchId) {
+  const result = await db.query('SELECT * FROM churches WHERE id=$1', [churchId]);
+  return result.rowCount === 1 ? result.rows[0] : null;
+}
+
 function normalizeJsonArray(value, fieldName) {
   if (value === undefined || value === null || value === '') return [];
   if (!Array.isArray(value)) throw new Error(`${fieldName} must be an array`);
@@ -223,6 +228,98 @@ router.get('/churches/:id', async (req, res) => {
   const c = await db.query('SELECT * FROM churches WHERE id=$1', [id]);
   if (c.rowCount !== 1) return res.status(404).json({ error: 'Church not found' });
   return res.json({ church: c.rows[0] });
+});
+
+// Update church details by church UUID (super or owning regional_admin)
+router.put('/churches/:id', authRequired, requireRole('super', 'regional_admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await getChurchById(id);
+    if (!existing) return res.status(404).json({ error: 'Church not found' });
+
+    if (req.user.role === 'regional_admin') {
+      const allowedRegion = await userCanPostToRegion(req.user.id, existing.region_id);
+      if (!allowedRegion) return res.status(403).json({ error: 'Forbidden for this region' });
+    }
+
+    const {
+      id: external_id,
+      name,
+      location,
+      address,
+      phone,
+      email,
+      description,
+      heroImage,
+      serviceTimes,
+      announcements,
+      pastor,
+      events,
+      ministries,
+      gallery,
+      mapUrl,
+      location_link
+    } = req.body;
+
+    const normalizedServiceTimes =
+      serviceTimes === undefined ? existing.service_times : normalizeJsonArray(serviceTimes, 'serviceTimes');
+    const normalizedAnnouncements =
+      announcements === undefined ? existing.announcements : normalizeJsonArray(announcements, 'announcements');
+    const normalizedEvents = events === undefined ? existing.events : normalizeJsonArray(events, 'events');
+    const normalizedMinistries =
+      ministries === undefined ? existing.ministries : normalizeJsonArray(ministries, 'ministries');
+    const normalizedGallery = gallery === undefined ? existing.gallery : normalizeJsonArray(gallery, 'gallery');
+    const normalizedPastor = pastor === undefined ? existing.pastor : normalizeJsonObject(pastor, 'pastor');
+
+    await db.query(
+      `UPDATE churches
+       SET external_id = $1,
+           name = $2,
+           location = $3,
+           address = $4,
+           phone = $5,
+           email = $6,
+           description = $7,
+           hero_image = $8,
+           service_times = $9::jsonb,
+           announcements = $10::jsonb,
+           pastor = $11::jsonb,
+           events = $12::jsonb,
+           ministries = $13::jsonb,
+           gallery = $14::jsonb,
+           map_url = $15,
+           location_link = $16,
+           updated_at = NOW()
+       WHERE id = $17`,
+      [
+        external_id === undefined ? existing.external_id : external_id,
+        name === undefined ? existing.name : name,
+        location === undefined ? existing.location : location,
+        address === undefined ? existing.address : address,
+        phone === undefined ? existing.phone : phone,
+        email === undefined ? existing.email : email,
+        description === undefined ? existing.description : description,
+        heroImage === undefined ? existing.hero_image : heroImage,
+        JSON.stringify(normalizedServiceTimes),
+        JSON.stringify(normalizedAnnouncements),
+        JSON.stringify(normalizedPastor),
+        JSON.stringify(normalizedEvents),
+        JSON.stringify(normalizedMinistries),
+        JSON.stringify(normalizedGallery),
+        mapUrl === undefined ? existing.map_url : mapUrl,
+        location_link === undefined ? existing.location_link : location_link,
+        id
+      ]
+    );
+
+    const updated = await getChurchById(id);
+    return res.json({ ok: true, church: updated });
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'Church id already exists for this region' });
+    if (err.message && err.message.includes('must be')) return res.status(400).json({ error: err.message });
+    console.error(err);
+    return res.status(500).json({ error: 'Server error' });
+  }
 });
 
 // Create blog item for homepage (super only)
