@@ -48,8 +48,8 @@ router.post('/regions', authRequired, requireRole('super'), async (req, res) => 
   return res.json({ ok: true, id });
 });
 
-// List regions (super and regional admin)
-router.get('/regions', authRequired, requireRole('super', 'regional_admin'), async (req, res) => {
+// Public list of regions
+router.get('/regions', async (req, res) => {
   const r = await db.query('SELECT * FROM regions');
   return res.json({ regions: r.rows });
 });
@@ -70,28 +70,9 @@ router.post('/churches', authRequired, requireRole('super'), async (req, res) =>
   return res.json({ ok: true, id });
 });
 
-// List churches (super: all; regional admin: own region by default)
-router.get('/churches', authRequired, requireRole('super', 'regional_admin'), async (req, res) => {
+// Public list of churches (optionally filtered by region_id)
+router.get('/churches', async (req, res) => {
   const { region_id } = req.query;
-  const user = req.user;
-
-  if (user.role === 'regional_admin') {
-    if (region_id) {
-      const allowed = await userCanPostToRegion(user.id, region_id);
-      if (!allowed) return res.status(403).json({ error: 'Forbidden for this region' });
-      const c = await db.query('SELECT * FROM churches WHERE region_id=$1 ORDER BY created_at DESC', [region_id]);
-      return res.json({ churches: c.rows });
-    }
-    const c = await db.query(
-      `SELECT c.*
-       FROM churches c
-       JOIN user_regions ur ON ur.region_id = c.region_id
-       WHERE ur.user_id = $1
-       ORDER BY c.created_at DESC`,
-      [user.id]
-    );
-    return res.json({ churches: c.rows });
-  }
 
   if (region_id) {
     const c = await db.query('SELECT * FROM churches WHERE region_id=$1 ORDER BY created_at DESC', [region_id]);
@@ -201,15 +182,10 @@ router.post('/posts', authRequired, async (req, res) => {
   return res.json({ ok: true, id });
 });
 
-// List posts for region (search + sort + newest first + timestamps)
-router.get('/posts', authRequired, async (req, res) => {
+// Public list posts for region (search + sort + newest first + timestamps)
+router.get('/posts', async (req, res) => {
   const { region_id, search = '', sort = 'newest', include_expired = 'false', category } = req.query;
   if (!region_id) return res.status(400).json({ error: 'Missing region_id' });
-
-  if (req.user.role === 'regional_admin') {
-    const allowed = await userCanPostToRegion(req.user.id, region_id);
-    if (!allowed) return res.status(403).json({ error: 'Forbidden for this region' });
-  }
 
   const includeExpired = String(include_expired).toLowerCase() === 'true';
   const isNewest = sort !== 'oldest';
@@ -296,15 +272,10 @@ router.post('/galleries', authRequired, requireRole('super', 'regional_admin'), 
   return res.json({ ok: true, id });
 });
 
-// List gallery images by region (newest first by default)
-router.get('/galleries', authRequired, async (req, res) => {
+// Public list gallery images by region (newest first by default)
+router.get('/galleries', async (req, res) => {
   const { region_id, search = '', sort = 'newest', include_expired = 'false' } = req.query;
   if (!region_id) return res.status(400).json({ error: 'Missing region_id' });
-
-  if (req.user.role === 'regional_admin') {
-    const allowed = await userCanPostToRegion(req.user.id, region_id);
-    if (!allowed) return res.status(403).json({ error: 'Forbidden for this region' });
-  }
 
   const includeExpired = String(include_expired).toLowerCase() === 'true';
   const isNewest = sort !== 'oldest';
@@ -328,6 +299,38 @@ router.get('/galleries', authRequired, async (req, res) => {
       AND ($3::boolean = true OR g.expires_at IS NULL OR g.expires_at > NOW())
     ORDER BY g.created_at ${isNewest ? 'DESC' : 'ASC'}`,
     [region_id, search, includeExpired]
+  );
+
+  return res.json({ galleries: result.rows });
+});
+
+// Public list all gallery images across all regions (newest first by default)
+router.get('/galleries/all', async (req, res) => {
+  const { search = '', sort = 'newest', include_expired = 'false' } = req.query;
+
+  const includeExpired = String(include_expired).toLowerCase() === 'true';
+  const isNewest = sort !== 'oldest';
+
+  const result = await db.query(
+    `SELECT
+      g.id,
+      g.author_id,
+      g.region_id,
+      r.name AS region_name,
+      g.church_id,
+      c.name AS church_name,
+      g.caption,
+      g.image_url,
+      g.location_link,
+      g.expires_at,
+      g.created_at
+    FROM region_galleries g
+    LEFT JOIN regions r ON r.id = g.region_id
+    LEFT JOIN churches c ON c.id = g.church_id
+    WHERE ($1 = '' OR g.caption ILIKE '%' || $1 || '%')
+      AND ($2::boolean = true OR g.expires_at IS NULL OR g.expires_at > NOW())
+    ORDER BY g.created_at ${isNewest ? 'DESC' : 'ASC'}`,
+    [search, includeExpired]
   );
 
   return res.json({ galleries: result.rows });

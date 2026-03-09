@@ -17,5 +17,11 @@ app.use('/invite', inviteRoutes);
 app.use('/api', adminRoutes);
 app.use('/api', uploadRoutes);
 
+// Backward-compatible alias for clients requesting galleries outside the /api prefix.
+app.get('/galleries/all', (req, res) => {
+	const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+	return res.redirect(`/api/galleries/all${query}`);
+});
+
 const port = process.env.PORT || 4000;
 app.listen(port, () => console.log('Server running on port', port));

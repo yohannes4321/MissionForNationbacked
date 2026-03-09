@@ -54,12 +54,14 @@ router.post('/register', async (req, res) => {
 // Accept invitation and sign in directly
 router.post('/accept-invite', async (req, res) => {
   const { token, email, password } = req.body;
-  if (!token || !email || !password) return res.status(400).json({ error: 'Missing fields' });
+  if (!token || !password) return res.status(400).json({ error: 'Missing token or password' });
   try {
     const invResult = await getValidInvitation(token, email);
     if (!invResult.ok) return res.status(400).json({ error: invResult.error });
 
-    const existing = await db.query('SELECT id FROM users WHERE email=$1', [email]);
+    const invitationEmail = invResult.invitation.email;
+
+    const existing = await db.query('SELECT id FROM users WHERE email=$1', [invitationEmail]);
     if (existing.rowCount > 0) return res.status(409).json({ error: 'User already exists for this email' });
 
     const hashed = await bcrypt.hash(password, 10);
@@ -67,17 +69,84 @@ router.post('/accept-invite', async (req, res) => {
     const role = invResult.invitation.role;
     const region_id = invResult.invitation.region_id;
 
-    await db.query('INSERT INTO users(id,email,password,role) VALUES($1,$2,$3,$4)', [id, email, hashed, role]);
+    await db.query('INSERT INTO users(id,email,password,role) VALUES($1,$2,$3,$4)', [id, invitationEmail, hashed, role]);
     if (region_id) {
       await db.query('INSERT INTO user_regions(user_id, region_id) VALUES($1,$2)', [id, region_id]);
     }
     await db.query('UPDATE invitations SET accepted=true WHERE id=$1', [invResult.invitation.id]);
 
-    const authToken = jwt.sign({ id, email, role }, JWT_SECRET, { expiresIn: '7d' });
-    return res.json({ ok: true, token: authToken, user: { id, email, role, region_id } });
+    const authToken = jwt.sign({ id, email: invitationEmail, role }, JWT_SECRET, { expiresIn: '7d' });
+    return res.json({ ok: true, token: authToken, user: { id, email: invitationEmail, role, region_id } });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.get('/accept-invite', async (req, res) => {
+  const { token } = req.query;
+  if (!token) return res.status(400).send('Missing token');
+
+  try {
+    const invResult = await getValidInvitation(token);
+    if (!invResult.ok) return res.status(400).send(invResult.error);
+
+    const invitationEmail = invResult.invitation.email;
+
+    return res.type('html').send(`<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Accept Invitation</title>
+    <style>
+      body { font-family: sans-serif; max-width: 420px; margin: 48px auto; padding: 0 16px; }
+      input, button { width: 100%; padding: 10px; margin-top: 10px; }
+      .muted { color: #444; font-size: 14px; }
+      .error { color: #b00020; margin-top: 10px; }
+      .ok { color: #066a2f; margin-top: 10px; }
+    </style>
+  </head>
+  <body>
+    <h2>Accept Invitation</h2>
+    <p class="muted">Email: ${invitationEmail}</p>
+    <form id="accept-form">
+      <input id="password" type="password" placeholder="Set your password" required minlength="8" />
+      <button type="submit">Create Account</button>
+    </form>
+    <div id="message"></div>
+    <script>
+      const form = document.getElementById('accept-form');
+      const message = document.getElementById('message');
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        message.className = '';
+        message.textContent = 'Creating account...';
+
+        const password = document.getElementById('password').value;
+        const response = await fetch('/auth/accept-invite', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: '${token}', password })
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          message.className = 'error';
+          message.textContent = data.error || 'Failed to accept invitation';
+          return;
+        }
+
+        message.className = 'ok';
+        message.textContent = 'Account created. You can now log in.';
+      });
+    </script>
+  </body>
+</html>`);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).send('Server error');
   }
 });
 

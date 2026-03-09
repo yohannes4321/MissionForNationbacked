@@ -6,6 +6,11 @@ const { sendMail } = require('../utils/email');
 const { authRequired, requireRole } = require('../middleware/auth');
 require('dotenv').config();
 
+function buildAcceptInviteUrl(token) {
+  const base = process.env.INVITE_ACCEPT_URL_BASE || `http://localhost:${process.env.PORT || 4000}`;
+  return `${base}/auth/accept-invite?token=${token}`;
+}
+
 // Send invitation (super user)
 router.post('/send', authRequired, requireRole('super'), async (req, res) => {
   const { email, role, region_id } = req.body;
@@ -24,7 +29,7 @@ router.post('/send', authRequired, requireRole('super'), async (req, res) => {
     const expires = new Date(Date.now() + 1000 * 60 * 60 * 24 * 7); // 7 days
     const id = uuidv4();
     await db.query('INSERT INTO invitations(id,email,role,region_id,token,expires_at,sent_count,accepted) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [id, email, role, regionId, token, expires, 1, false]);
-    const url = `${process.env.NEXT_PUBLIC_APP_URL}/accept-invite?token=${token}`;
+    const url = buildAcceptInviteUrl(token);
     await sendMail({ to: email, subject: 'Invitation', html: `<p>You are invited as ${role} in region ${regionName || ''}. Accept: <a href="${url}">${url}</a></p>` });
     return res.json({ ok: true, token, region_id: regionId, region_name: regionName });
   } catch (err) {
@@ -44,7 +49,7 @@ router.post('/resend', authRequired, requireRole('super'), async (req, res) => {
     const inv = invr.rows[0];
     const token = uuidv4();
     await db.query('UPDATE invitations SET token=$1,expires_at=$2,sent_count=sent_count+1 WHERE id=$3', [token, new Date(Date.now() + 1000 * 60 * 60 * 24 * 7), invitation_id]);
-    const url = `${process.env.NEXT_PUBLIC_APP_URL}/accept-invite?token=${token}`;
+    const url = buildAcceptInviteUrl(token);
     await sendMail({ to: inv.email, subject: 'Invitation (resend)', html: `<p>Accept: <a href="${url}">${url}</a></p>` });
     return res.json({ ok: true, token, invitation_url: url });
   } catch (err) {
