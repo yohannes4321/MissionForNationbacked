@@ -7,8 +7,9 @@ const { authRequired, requireRole } = require('../middleware/auth');
 require('dotenv').config();
 
 function buildAcceptInviteUrl(token) {
-  const base = process.env.INVITE_ACCEPT_URL_BASE || `http://localhost:${process.env.PORT || 4000}`;
-  return `${base}/auth/accept-invite?token=${token}`;
+  const base = process.env.INVITE_ACCEPT_URL_BASE || 'http://localhost:5173';
+  const path = process.env.INVITE_ACCEPT_PATH || '/auth/accept-invite';
+  return `${base}${path}?token=${encodeURIComponent(token)}`;
 }
 
 // Send invitation (super user)
