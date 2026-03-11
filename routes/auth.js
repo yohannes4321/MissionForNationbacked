@@ -83,6 +83,23 @@ router.post('/accept-invite', async (req, res) => {
   }
 });
 
+router.post('/login', async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) return res.status(400).json({ error: 'Missing fields' });
+  try {
+    const user = await db.query('SELECT id,email,password,role FROM users WHERE email=$1', [email]);
+    if (user.rowCount !== 1) return res.status(401).json({ error: 'Invalid credentials' });
+    const valid = await bcrypt.compare(password, user.rows[0].password);
+    if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
+    const { id, email: userEmail, role } = user.rows[0];
+    const authToken = jwt.sign({ id, email: userEmail, role }, JWT_SECRET, { expiresIn: '7d' });
+    return res.json({ ok: true, token: authToken, user: { id, email: userEmail, role } });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
 router.get('/accept-invite', async (req, res) => {
   const { token } = req.query;
   if (!token) return res.status(400).send('Missing token');
@@ -160,29 +177,11 @@ router.post('/login', async (req, res) => {
     if (!u.password) return res.status(400).json({ error: 'No password set; accept invitation first' });
     const ok = await bcrypt.compare(password, u.password);
     if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
-
-    const superAdminEmail = (process.env.SUPER_ADMIN_EMAIL || '').toLowerCase();
-    let role = u.role;
-    if (superAdminEmail && u.email.toLowerCase() === superAdminEmail && u.role !== 'super') {
-      await db.query('UPDATE users SET role=$1 WHERE id=$2', ['super', u.id]);
-      role = 'super';
-    }
-
-    const regionResult = await db.query('SELECT region_id FROM user_regions WHERE user_id=$1 LIMIT 1', [u.id]);
-    const region_id = regionResult.rowCount > 0 ? regionResult.rows[0].region_id : null;
-
-    const token = jwt.sign({ id: u.id, email: u.email, role }, JWT_SECRET, { expiresIn: '7d' });
-    return res.json({
-      ok: true,
-      token,
-      user: {
-        id: u.id,
-        email: u.email,
-        role,
-        region_id
-      }
-    });
-  } catch (err) {
+    const token = jwt.sign({ id: u.id, email: u.email, role: u.role }, JWT_SECRET, { expiresIn: '7d' });
+return res.json({ 
+  token, 
+  user: { id: u.id, email: u.email, role: u.role } 
+});  } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Server error' });
   }
