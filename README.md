@@ -184,7 +184,14 @@ python test.py
 docker build -t neural-miner .
 
 # Run container with API server
-docker run -p 5000:5000 neural-miner
+# - Loads GEMINI_API_KEY and other vars from local .env
+# - Mounts local results directory so mined patterns are visible at /app/results
+mkdir -p results
+docker run --rm \
+   --env-file .env \
+   -v "$(pwd)/results:/app/results" \
+   -p 5000:5000 \
+   neural-miner
 
 # Access API at http://localhost:5000
 ```
@@ -226,6 +233,35 @@ python -m subgraph_mining.decoder --dataset=enzymes --node_anchored
 - `--dataset`: Dataset to mine (e.g., `enzymes`, `cox2`, `reddit`)
 - `--node_anchored`: Enable node-anchored mining
 - `--model_path`: Path to trained encoder checkpoint
+
+### Task 2: Implementation and Comparative Analysis (SNAP)
+
+If you want to run your assignment on a SNAP edge-list dataset (for example `Email-EuAll.txt`) and compare all three search strategies:
+
+```bash
+# 1) Convert SNAP edge-list to SPMiner graph pickle
+python prepare-econ.py \
+   --edgelist Email-EuAll.txt \
+   --output data/email_euall_spminer.pkl
+
+# 2) Run comparative analysis (Greedy, MCTS, Beam) with hyperparameter sweeps
+python analyze/task2_comparative_analysis.py \
+   --dataset data/email_euall_spminer.pkl \
+   --model_path ckpt/model.pt \
+   --strategies greedy mcts beam \
+   --n_trials 100 300 \
+   --n_neighborhoods 200 500 \
+   --beam_width 3 5 \
+   --graph_type undirected \
+   --run_tag email_euall_task2 \
+   --output_dir results/task2
+```
+
+Outputs generated automatically:
+- `results/task2/email_euall_task2_metrics.csv`: per-run metrics table
+- `results/task2/plots/email_euall_task2_strategy_vs_runtime.png`: Search Strategy vs Runtime
+- `results/task2/plots/email_euall_task2_config_vs_patterns.png`: Configuration Tuning vs Number of Patterns Found
+- `results/task2/email_euall_task2_summary.md`: auto-selected Best Config and Best Algorithm
 
 #### Count and Analyze Patterns
 
@@ -278,7 +314,8 @@ To use the LLM-powered interpreter:
 uvicorn app.main:app --host 0.0.0.0 --port 5000
 
 # Using Docker
-docker run -p 5000:5000 neural-miner
+mkdir -p results
+docker run --rm --env-file .env -v "$(pwd)/results:/app/results" -p 5000:5000 neural-miner
 ```
 
 #### API Endpoints
