@@ -1,43 +1,19 @@
-const nodemailer = require('nodemailer');
-const dotenv = require('dotenv');
-dotenv.config();
+const { Resend } = require('resend');
+const resend = new Resend(process.env.RESEND_API_KEY);
 
-function unquoteEnv(value) {
-  if (value === undefined || value === null) return '';
-  const str = String(value).trim();
-  if (
-    (str.startsWith('"') && str.endsWith('"')) ||
-    (str.startsWith("'") && str.endsWith("'"))
-  ) {
-    return str.slice(1, -1).trim();
-  }
-  return str;
+async function sendMail({ to, subject, html, text }) {
+  const from = 'onboarding@resend.dev'; // For testing, use Resend's test sender
+  const info = await resend.emails.send({
+    from,
+    to,
+    subject,
+    html,
+    text
+  });
+  return info;
 }
 
-// Configuration Parsing
-const smtpHost = unquoteEnv(process.env.SMTP_HOST);
-const smtpUser = unquoteEnv(process.env.SMTP_USER);
-const smtpFrom = unquoteEnv(process.env.SMTP_FROM);
-const requestedSmtpPort = Number(unquoteEnv(process.env.SMTP_PORT) || 587);
-const allowPort25 = unquoteEnv(process.env.SMTP_ALLOW_PORT_25).toLowerCase() === 'true';
-
-const smtpPort = requestedSmtpPort === 25 && !allowPort25 ? 587 : requestedSmtpPort;
-if (requestedSmtpPort === 25 && !allowPort25) {
-  console.warn('[SMTP] Port 25 requested but blocked by default; using 587 instead');
-}
-
-const smtpSecure =
-  process.env.SMTP_SECURE !== undefined
-    ? unquoteEnv(process.env.SMTP_SECURE).toLowerCase() === 'true'
-    : smtpPort === 465;
-
-const tlsRejectUnauthorized =
-  process.env.SMTP_TLS_REJECT_UNAUTHORIZED !== undefined
-    ? unquoteEnv(process.env.SMTP_TLS_REJECT_UNAUTHORIZED).toLowerCase() !== 'false'
-    : true;
-
-const tlsMinVersion = unquoteEnv(process.env.SMTP_TLS_MIN_VERSION) || 'TLSv1.2';
-const smtpPassword = unquoteEnv(process.env.SMTP_PASS).replace(/\s+/g, '');
+module.exports = { sendMail };
 
 console.log('[SMTP] Transport configured', {
   host: smtpHost || '(missing)',
