@@ -12,10 +12,10 @@ function buildAcceptInviteUrl(token) {
 }
 
 function mapInviteError(err) {
-  if (!err) return { status: 500, error: 'Server error' };
+  if (!err) return { status: 500, error: 'Server error', code: 'UNKNOWN', detail: null };
 
   if (err.code === '23503') {
-    return { status: 400, error: 'Invalid region_id' };
+    return { status: 400, error: 'Invalid region_id', code: err.code, detail: err.message || null };
   }
 
   if (
@@ -27,10 +27,20 @@ function mapInviteError(err) {
     err.code === 'ECONNRESET' ||
     err.code === 'ENOTFOUND'
   ) {
-    return { status: 502, error: 'Failed to send invitation email. Check SMTP configuration.' };
+    return {
+      status: 502,
+      error: 'Failed to send invitation email. Check SMTP configuration.',
+      code: err.code || 'SMTP_ERROR',
+      detail: err.message || null
+    };
   }
 
-  return { status: 500, error: 'Server error' };
+  return {
+    status: 500,
+    error: 'Server error',
+    code: err.code || 'UNEXPECTED',
+    detail: err.message || null
+  };
 }
 
 // Send invitation (super user)
@@ -68,7 +78,11 @@ router.post('/send', authRequired, requireRole('super'), async (req, res) => {
   } catch (err) {
     console.error('Invite send failed:', err);
     const mapped = mapInviteError(err);
-    return res.status(mapped.status).json({ error: mapped.error });
+    return res.status(mapped.status).json({
+      error: mapped.error,
+      code: mapped.code,
+      detail: mapped.detail
+    });
   }
 });
 
@@ -96,7 +110,11 @@ router.post('/resend', authRequired, requireRole('super'), async (req, res) => {
   } catch (err) {
     console.error('Invite resend failed:', err);
     const mapped = mapInviteError(err);
-    return res.status(mapped.status).json({ error: mapped.error });
+    return res.status(mapped.status).json({
+      error: mapped.error,
+      code: mapped.code,
+      detail: mapped.detail
+    });
   }
 });
 
