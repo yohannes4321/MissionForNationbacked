@@ -43,9 +43,10 @@ function getSingleUploadedFile(req) {
 
 function requireCloudinaryConfig(req, res, next) {
   const hasConfig =
-    process.env.CLOUDINARY_CLOUD_NAME &&
-    process.env.CLOUDINARY_API_KEY &&
-    process.env.CLOUDINARY_API_SECRET;
+    (process.env.CLOUDINARY_CLOUD_NAME &&
+      process.env.CLOUDINARY_API_KEY &&
+      process.env.CLOUDINARY_API_SECRET) ||
+    process.env.CLOUDINARY_URL;
 
   if (!hasConfig) {
     return res.status(500).json({ error: 'Cloudinary is not configured on server' });

@@ -11,6 +11,20 @@ function buildAcceptInviteUrl(token) {
   return `${base}/accept-invite?token=${token}`;
 }
 
+function mapInviteError(err) {
+  if (!err) return { status: 500, error: 'Server error' };
+
+  if (err.code === '23503') {
+    return { status: 400, error: 'Invalid region_id' };
+  }
+
+  if (err.code === 'EAUTH' || err.code === 'EENVELOPE' || err.code === 'ESOCKET' || err.code === 'ECONNECTION') {
+    return { status: 502, error: 'Failed to send invitation email. Check SMTP configuration.' };
+  }
+
+  return { status: 500, error: 'Server error' };
+}
+
 // Send invitation (super user)
 router.post('/send', authRequired, requireRole('super'), async (req, res) => {
   const { email, role, region_id } = req.body;
@@ -34,7 +48,8 @@ router.post('/send', authRequired, requireRole('super'), async (req, res) => {
     return res.json({ ok: true, token, region_id: regionId, region_name: regionName });
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ error: 'Server error' });
+    const mapped = mapInviteError(err);
+    return res.status(mapped.status).json({ error: mapped.error });
   }
 });
 
@@ -54,7 +69,8 @@ router.post('/resend', authRequired, requireRole('super'), async (req, res) => {
     return res.json({ ok: true, token, invitation_url: url });
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ error: 'Server error' });
+    const mapped = mapInviteError(err);
+    return res.status(mapped.status).json({ error: mapped.error });
   }
 });
 
@@ -88,20 +104,6 @@ router.get('/validate', async (req, res) => {
     });
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// Add this to your backend invitation routes file
-router.get('/validate', async (req, res) => {
-  const { token } = req.query;
-  try {
-    const inv = await db.query('SELECT * FROM invitations WHERE token=$1 AND accepted=false', [token]);
-    if (inv.rowCount === 1) {
-      return res.json({ valid: true, email: inv.rows[0].email, role: inv.rows[0].role });
-    }
-    return res.status(400).json({ error: 'Invalid or expired token' });
-  } catch (err) {
     return res.status(500).json({ error: 'Server error' });
   }
 });
