@@ -102,7 +102,6 @@ router.post('/send', authRequired, requireRole('super'), async (req, res) => {
     });
     return res.json({ ok: true, token, region_id: regionId, region_name: regionName });
   } catch (err) {
-    console.error("error",err)
     console.error('[INVITE] Send failed', {
       email,
       role,
