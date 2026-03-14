@@ -67,7 +67,6 @@ function createTransport(port, secure) {
       text
     });
     return info;
-  }
+}
 
-  module.exports = { sendMail };
 module.exports = { sendMail };
