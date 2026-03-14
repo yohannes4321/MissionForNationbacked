@@ -13,32 +13,13 @@ function buildAcceptInviteUrl(token) {
 
 function mapInviteError(err) {
   if (!err) return { status: 500, error: 'Server error', code: 'UNKNOWN', detail: null };
-
   if (err.code === '23503') {
     return { status: 400, error: 'Invalid region_id', code: err.code, detail: err.message || null };
   }
-
-  if (
-    err.code === 'EAUTH' ||
-    err.code === 'EENVELOPE' ||
-    err.code === 'ESOCKET' ||
-    err.code === 'ECONNECTION' ||
-    err.code === 'ETIMEDOUT' ||
-    err.code === 'ECONNRESET' ||
-    err.code === 'ENOTFOUND'
-  ) {
-    return {
-      status: 502,
-      error: 'Failed to send invitation email. Check SMTP configuration.',
-      code: err.code || 'SMTP_ERROR',
-      detail: err.message || null
-    };
-  }
-
   return {
     status: 500,
-    error: 'Server error',
-    code: err.code || 'UNEXPECTED',
+    error: 'Failed to send invitation email.',
+    code: err.code || 'EMAIL_ERROR',
     detail: err.message || null
   };
 }

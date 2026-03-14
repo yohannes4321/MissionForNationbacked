@@ -54,85 +54,20 @@ console.log('[SMTP] Transport configured', {
 });
 
 function createTransport(port, secure) {
-  return nodemailer.createTransport({
-    host: smtpHost,
-    port,
-    secure,
-    family: smtpFamily,
-    connectionTimeout: Number(process.env.SMTP_CONNECTION_TIMEOUT_MS || 10000),
-    greetingTimeout: Number(process.env.SMTP_GREETING_TIMEOUT_MS || 10000),
-    socketTimeout: Number(process.env.SMTP_SOCKET_TIMEOUT_MS || 15000),
-    tls: {
-      rejectUnauthorized: tlsRejectUnauthorized,
-      minVersion: tlsMinVersion
-    },
-    auth: {
-      user: smtpUser,
-      pass: smtpPassword
-    }
-  });
-}
+  const { Resend } = require('resend');
+  const resend = new Resend(process.env.RESEND_API_KEY);
 
-const primaryTransporter = createTransport(smtpPort, smtpSecure);
-
-async function sendMail({ to, subject, html, text }) {
-  const from = smtpFrom || smtpUser;
-  try {
-    const info = await primaryTransporter.sendMail({ from, to, subject, html, text });
-    return info;
-  } catch (err) {
-    // Normalize common network timeout failure shapes so route handlers can map them consistently.
-    if (!err.code && /timeout/i.test(String(err.message || ''))) {
-      err.code = 'ETIMEDOUT';
-    }
-
-    console.error('[SMTP] Primary send failed', {
+  async function sendMail({ to, subject, html, text }) {
+    const from = 'onboarding@resend.dev'; // For testing, use Resend's test sender
+    const info = await resend.emails.send({
+      from,
       to,
-      host: smtpHost,
-      port: smtpPort,
-      secure: smtpSecure,
-      code: err && err.code,
-      errno: err && err.errno,
-      syscall: err && err.syscall,
-      command: err && err.command,
-      responseCode: err && err.responseCode,
-      message: err && err.message,
-      address: err && err.address
+      subject,
+      html,
+      text
     });
-
-    const canRetryWithStartTls =
-      smtpHost === 'smtp.gmail.com' &&
-      smtpPort !== 587 &&
-      (err.code === 'ETIMEDOUT' || err.code === 'ECONNECTION' || err.code === 'ESOCKET' || err.code === 'ENOTFOUND');
-    if (canRetryWithStartTls) {
-      try {
-        console.warn('[SMTP] Retrying with gmail STARTTLS fallback on port 587');
-        const fallbackTransporter = createTransport(587, false);
-        const info = await fallbackTransporter.sendMail({ from, to, subject, html, text });
-        return info;
-      } catch (fallbackErr) {
-        if (!fallbackErr.code && /timeout/i.test(String(fallbackErr.message || ''))) {
-          fallbackErr.code = 'ETIMEDOUT';
-        }
-        console.error('[SMTP] Fallback send failed', {
-          to,
-          host: smtpHost,
-          port: 587,
-          secure: false,
-          code: fallbackErr && fallbackErr.code,
-          errno: fallbackErr && fallbackErr.errno,
-          syscall: fallbackErr && fallbackErr.syscall,
-          command: fallbackErr && fallbackErr.command,
-          responseCode: fallbackErr && fallbackErr.responseCode,
-          message: fallbackErr && fallbackErr.message,
-          address: fallbackErr && fallbackErr.address
-        });
-        throw fallbackErr;
-      }
-    }
-
-    throw err;
+    return info;
   }
-}
 
+  module.exports = { sendMail };
 module.exports = { sendMail };
