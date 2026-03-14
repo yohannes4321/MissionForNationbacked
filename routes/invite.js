@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { v4: uuidv4, validate: uuidValidate } = require('uuid');
-const { sendMail } = require('../utils/email');
+const { sendMail } = require('../utils/email'); // Uses Resend API
 const { authRequired, requireRole } = require('../middleware/auth');
 require('dotenv').config();
 
@@ -30,7 +30,11 @@ router.post('/send', authRequired, requireRole('super'), async (req, res) => {
     const id = uuidv4();
     await db.query('INSERT INTO invitations(id,email,role,region_id,token,expires_at,sent_count,accepted) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [id, email, role, regionId, token, expires, 1, false]);
     const url = buildAcceptInviteUrl(token);
-    await sendMail({ to: email, subject: 'Invitation', html: `<p>You are invited as ${role} in region ${regionName || ''}. Accept: <a href="${url}">${url}</a></p>` });
+    await sendMail({
+      to: email,
+      subject: 'Regional Admin Invitation',
+      html: `<h2>You are invited to join</h2><p>You are invited as ${role} in region ${regionName || ''}. Click the link below to register:</p><a href="${url}">${url}</a>`
+    });
     return res.json({ ok: true, token, region_id: regionId, region_name: regionName });
   } catch (err) {
     console.error(err);
@@ -50,7 +54,11 @@ router.post('/resend', authRequired, requireRole('super'), async (req, res) => {
     const token = uuidv4();
     await db.query('UPDATE invitations SET token=$1,expires_at=$2,sent_count=sent_count+1 WHERE id=$3', [token, new Date(Date.now() + 1000 * 60 * 60 * 24 * 7), invitation_id]);
     const url = buildAcceptInviteUrl(token);
-    await sendMail({ to: inv.email, subject: 'Invitation (resend)', html: `<p>Accept: <a href="${url}">${url}</a></p>` });
+    await sendMail({
+      to: inv.email,
+      subject: 'Regional Admin Invitation (Resend)',
+      html: `<h2>You are invited to join</h2><p>Click the link below to register:</p><a href="${url}">${url}</a>`
+    });
     return res.json({ ok: true, token, invitation_url: url });
   } catch (err) {
     console.error(err);

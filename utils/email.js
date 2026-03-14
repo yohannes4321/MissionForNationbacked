@@ -1,20 +1,15 @@
-const nodemailer = require('nodemailer');
-const dotenv = require('dotenv');
-dotenv.config();
-
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: Number(process.env.SMTP_PORT || 587),
-  secure: String(process.env.SMTP_SECURE) === 'true',
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS
-  }
-});
+const { Resend } = require('resend');
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 async function sendMail({ to, subject, html, text }) {
-  const from = process.env.SMTP_FROM;
-  const info = await transporter.sendMail({ from, to, subject, html, text });
+  const from = 'onboarding@resend.dev'; // For testing, use Resend's test sender
+  const info = await resend.emails.send({
+    from,
+    to,
+    subject,
+    html,
+    text
+  });
   return info;
 }
 
