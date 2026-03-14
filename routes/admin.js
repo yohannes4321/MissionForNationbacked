@@ -17,6 +17,12 @@ const upload = multer({
 
 const anyUploadField = upload.any();
 
+function asyncHandler(fn) {
+  return (req, res, next) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
+}
+
 function runMulter(middleware) {
   return (req, res, next) => {
     middleware(req, res, (err) => {
@@ -34,9 +40,10 @@ function runMulter(middleware) {
 
 function requireCloudinaryConfig(req, res, next) {
   const hasConfig =
-    process.env.CLOUDINARY_CLOUD_NAME &&
-    process.env.CLOUDINARY_API_KEY &&
-    process.env.CLOUDINARY_API_SECRET;
+    (process.env.CLOUDINARY_CLOUD_NAME &&
+      process.env.CLOUDINARY_API_KEY &&
+      process.env.CLOUDINARY_API_SECRET) ||
+    process.env.CLOUDINARY_URL;
 
   if (!hasConfig) {
     return res.status(500).json({ error: 'Cloudinary is not configured on server' });
@@ -95,36 +102,36 @@ function normalizeJsonObject(value, fieldName) {
 }
 
 // List users (super)
-router.get('/users', authRequired, requireRole('super'), async (req, res) => {
+router.get('/users', authRequired, requireRole('super'), asyncHandler(async (req, res) => {
   const result = await db.query('SELECT id,email,role FROM users');
   return res.json({ users: result.rows });
-});
+}));
 
 // Change role (super)
-router.post('/change-role', authRequired, requireRole('super'), async (req, res) => {
+router.post('/change-role', authRequired, requireRole('super'), asyncHandler(async (req, res) => {
   const { user_id, role } = req.body;
   if (!user_id || !role) return res.status(400).json({ error: 'Missing' });
   await db.query('UPDATE users SET role=$1 WHERE id=$2', [role, user_id]);
   return res.json({ ok: true });
-});
+}));
 
 // Create region (super)
-router.post('/regions', authRequired, requireRole('super'), async (req, res) => {
+router.post('/regions', authRequired, requireRole('super'), asyncHandler(async (req, res) => {
   const { name } = req.body;
   if (!name) return res.status(400).json({ error: 'Missing name' });
   const id = uuidv4();
   await db.query('INSERT INTO regions(id,name) VALUES($1,$2)', [id, name]);
   return res.json({ ok: true, id });
-});
+}));
 
 // Public list of regions
-router.get('/regions', async (req, res) => {
+router.get('/regions', asyncHandler(async (req, res) => {
   const r = await db.query('SELECT * FROM regions');
   return res.json({ regions: r.rows });
-});
+}));
 
 // Add church to a region (super or regional_admin)
-router.post('/churches', authRequired, requireRole('super', 'regional_admin'), async (req, res) => {
+router.post('/churches', authRequired, requireRole('super', 'regional_admin'), asyncHandler(async (req, res) => {
   try {
     const {
       id: external_id,
@@ -207,10 +214,10 @@ router.post('/churches', authRequired, requireRole('super', 'regional_admin'), a
     console.error(err);
     return res.status(500).json({ error: 'Server error' });
   }
-});
+}));
 
 // Public list of churches (optionally filtered by region_id)
-router.get('/churches', async (req, res) => {
+router.get('/churches', asyncHandler(async (req, res) => {
   const { region_id } = req.query;
 
   if (region_id) {
@@ -220,18 +227,18 @@ router.get('/churches', async (req, res) => {
 
   const c = await db.query('SELECT * FROM churches ORDER BY created_at DESC');
   return res.json({ churches: c.rows });
-});
+}));
 
 // Public church detail by id
-router.get('/churches/:id', async (req, res) => {
+router.get('/churches/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
   const c = await db.query('SELECT * FROM churches WHERE id=$1', [id]);
   if (c.rowCount !== 1) return res.status(404).json({ error: 'Church not found' });
   return res.json({ church: c.rows[0] });
-});
+}));
 
 // Update church details by church UUID (super or owning regional_admin)
-router.put('/churches/:id', authRequired, requireRole('super', 'regional_admin'), async (req, res) => {
+router.put('/churches/:id', authRequired, requireRole('super', 'regional_admin'), asyncHandler(async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await getChurchById(id);
@@ -320,10 +327,10 @@ router.put('/churches/:id', authRequired, requireRole('super', 'regional_admin')
     console.error(err);
     return res.status(500).json({ error: 'Server error' });
   }
-});
+}));
 
 // Create blog item for homepage (super only)
-router.post('/blogs', authRequired, requireRole('super'), requireCloudinaryConfig, runMulter(anyUploadField), async (req, res) => {
+router.post('/blogs', authRequired, requireRole('super'), requireCloudinaryConfig, runMulter(anyUploadField), asyncHandler(async (req, res) => {
   const { text, image_url: imageUrlFromBody, video_url: videoUrlFromBody, expires_in_days } = req.body;
 
   const { imageFile, videoFile } = getUploadedMediaFiles(req);
@@ -360,10 +367,10 @@ router.post('/blogs', authRequired, requireRole('super'), requireCloudinaryConfi
     [id, req.user.id, text || '', imageUrl, videoUrl, expiresAt]
   );
   return res.json({ ok: true, id });
-});
+}));
 
 // Public list for homepage blog section (search + sort + newest first)
-router.get('/blogs', async (req, res) => {
+router.get('/blogs', asyncHandler(async (req, res) => {
   const { search = '', sort = 'newest', include_expired = 'false' } = req.query;
   const isNewest = sort !== 'oldest';
   const includeExpired = String(include_expired).toLowerCase() === 'true';
@@ -378,10 +385,10 @@ router.get('/blogs', async (req, res) => {
 
   const r = await db.query(query, [search, includeExpired]);
   return res.json({ blogs: r.rows });
-});
+}));
 
 // Create post (super or regional admin)
-router.post('/posts', authRequired, async (req, res) => {
+router.post('/posts', authRequired, asyncHandler(async (req, res) => {
   const {
     title,
     type,
@@ -443,10 +450,10 @@ router.post('/posts', authRequired, async (req, res) => {
   }
 
   return res.json({ ok: true, id });
-});
+}));
 
 // Public list posts for region (search + sort + newest first + timestamps)
-router.get('/posts', async (req, res) => {
+router.get('/posts', asyncHandler(async (req, res) => {
   const { region_id, search = '', sort = 'newest', include_expired = 'false', category } = req.query;
   if (!region_id) return res.status(400).json({ error: 'Missing region_id' });
 
@@ -492,11 +499,11 @@ router.get('/posts', async (req, res) => {
   );
 
   return res.json({ posts: r.rows });
-});
+}));
 
 // Add gallery image for region (super or regional admin)
-router.post('/galleries', authRequired, requireRole('super', 'regional_admin'), async (req, res) => {
-  const { region_id, church_id, image_url, caption, location_link, expires_in_days } = req.body;
+router.post('/galleries', authRequired, requireRole('super', 'regional_admin'), asyncHandler(async (req, res) => {
+  const { region_id, church_id, title, type, description, image_url, caption, location_link, expires_in_days } = req.body;
   if (!region_id || !image_url) return res.status(400).json({ error: 'Missing region_id or image_url' });
 
   const rr = await db.query('SELECT id FROM regions WHERE id=$1', [region_id]);
@@ -518,13 +525,16 @@ router.post('/galleries', authRequired, requireRole('super', 'regional_admin'), 
   const id = uuidv4();
   await db.query(
     `INSERT INTO region_galleries(
-      id,author_id,region_id,church_id,caption,image_url,location_link,expires_at,created_at
-    ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,NOW())`,
+      id,author_id,region_id,church_id,title,type,description,caption,image_url,location_link,expires_at,created_at
+    ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())`,
     [
       id,
       req.user.id,
       region_id,
       church_id || null,
+      title || null,
+      type || null,
+      description || null,
       caption || null,
       image_url,
       location_link || null,
@@ -533,10 +543,10 @@ router.post('/galleries', authRequired, requireRole('super', 'regional_admin'), 
   );
 
   return res.json({ ok: true, id });
-});
+}));
 
 // Public list gallery images by region (newest first by default)
-router.get('/galleries', async (req, res) => {
+router.get('/galleries', asyncHandler(async (req, res) => {
   const { region_id, search = '', sort = 'newest', include_expired = 'false' } = req.query;
   if (!region_id) return res.status(400).json({ error: 'Missing region_id' });
 
@@ -550,6 +560,9 @@ router.get('/galleries', async (req, res) => {
       g.region_id,
       g.church_id,
       c.name AS church_name,
+      g.title,
+      g.type,
+      g.description,
       g.caption,
       g.image_url,
       g.location_link,
@@ -565,10 +578,10 @@ router.get('/galleries', async (req, res) => {
   );
 
   return res.json({ galleries: result.rows });
-});
+}));
 
 // Public list all gallery images across all regions (newest first by default)
-router.get('/galleries/all', async (req, res) => {
+router.get('/galleries/all', asyncHandler(async (req, res) => {
   const { search = '', sort = 'newest', include_expired = 'false' } = req.query;
 
   const includeExpired = String(include_expired).toLowerCase() === 'true';
@@ -582,6 +595,9 @@ router.get('/galleries/all', async (req, res) => {
       r.name AS region_name,
       g.church_id,
       c.name AS church_name,
+      g.title,
+      g.type,
+      g.description,
       g.caption,
       g.image_url,
       g.location_link,
@@ -597,6 +613,6 @@ router.get('/galleries/all', async (req, res) => {
   );
 
   return res.json({ galleries: result.rows });
-});
+}));
 
 module.exports = router;

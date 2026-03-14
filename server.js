@@ -12,7 +12,23 @@ process.on("uncaughtException", (err) => {
 });
 
 const app = express();
-app.use(cors());
+const allowedOrigins = String(process.env.CORS_ORIGINS || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow server-to-server, curl, and health checks with no Origin header.
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error(`CORS blocked for origin: ${origin}`));
+    },
+  }),
+);
 app.use(bodyParser.json());
 
 const authRoutes = require("./routes/auth");
@@ -25,6 +41,10 @@ app.use("/api/auth", authRoutes);
 app.use("/invite", inviteRoutes);
 app.use("/api", adminRoutes);
 app.use("/api", uploadRoutes);
+
+app.get("/health", (req, res) => {
+  return res.json({ ok: true });
+});
 
 // Backward-compatible alias for clients requesting galleries outside the /api prefix.
 app.get("/galleries/all", (req, res) => {
@@ -42,9 +62,31 @@ app.use((req, res, next) => {
 
 // global error handler
 app.use((err, req, res, next) => {
+  const isDbConnectivityError =
+    err &&
+    (err.code === "ENETUNREACH" ||
+      err.code === "ECONNREFUSED" ||
+      err.code === "EHOSTUNREACH");
+
+  if (isDbConnectivityError) {
+    console.error("Database connectivity error:", err.message);
+    return res.status(503).json({
+      error: "Database temporarily unavailable. Please try again shortly.",
+    });
+  }
+
   console.error("Unhandled error:", err);
   if (res.headersSent) return next(err);
-  res.status(500).json({ error: "Server error" });
+
+  const status = err.status || 500;
+  const payload = {
+    error: status === 500 ? "Server error" : err.message || "Request failed",
+  };
+  if (process.env.NODE_ENV !== "production" && err && err.message) {
+    payload.debug = err.message;
+  }
+
+  res.status(status).json(payload);
 });
 
 app.listen(port, () => console.log("Server running on port", port));

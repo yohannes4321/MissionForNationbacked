@@ -43,9 +43,10 @@ function getSingleUploadedFile(req) {
 
 function requireCloudinaryConfig(req, res, next) {
   const hasConfig =
-    process.env.CLOUDINARY_CLOUD_NAME &&
-    process.env.CLOUDINARY_API_KEY &&
-    process.env.CLOUDINARY_API_SECRET;
+    (process.env.CLOUDINARY_CLOUD_NAME &&
+      process.env.CLOUDINARY_API_KEY &&
+      process.env.CLOUDINARY_API_SECRET) ||
+    process.env.CLOUDINARY_URL;
 
   if (!hasConfig) {
     return res.status(500).json({ error: 'Cloudinary is not configured on server' });
@@ -63,6 +64,42 @@ function mapCloudinaryAsset(resource) {
     bytes: resource.bytes,
     created_at: resource.created_at
   };
+}
+
+async function saveMediaUploadMetadata({
+  uploaderId,
+  regionId,
+  churchId,
+  resourceType,
+  title,
+  type,
+  description,
+  caption,
+  cloudinaryResult
+}) {
+  await db.query(
+    `INSERT INTO media_uploads(
+      id,uploader_id,region_id,church_id,resource_type,title,media_type,description,caption,
+      public_id,format,secure_url,url,bytes,created_at
+    ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NOW())
+    ON CONFLICT (public_id) DO NOTHING`,
+    [
+      uuidv4(),
+      uploaderId || null,
+      regionId || null,
+      churchId || null,
+      resourceType,
+      title || null,
+      type || null,
+      description || null,
+      caption || null,
+      cloudinaryResult.public_id,
+      cloudinaryResult.format || null,
+      cloudinaryResult.secure_url,
+      cloudinaryResult.url || null,
+      cloudinaryResult.bytes || null
+    ]
+  );
 }
 
 async function validateRegionForUpload(user, regionId) {
@@ -95,29 +132,36 @@ function parseExpiryDate(expiresInDays) {
 
 async function listCloudinaryImages(req, res) {
   try {
-    const folder = req.query.folder || 'mission-for-nation/images';
-    const nextCursor = req.query.next_cursor;
-    const maxResultsRaw = Number(req.query.max_results || 100);
-    const maxResults = Number.isFinite(maxResultsRaw)
-      ? Math.min(Math.max(maxResultsRaw, 1), 500)
-      : 100;
+    const { region_id, search = '' } = req.query;
 
-    const result = await cloudinary.api.resources({
-      type: 'upload',
-      resource_type: 'image',
-      prefix: folder,
-      max_results: maxResults,
-      next_cursor: nextCursor
-    });
+    const result = await db.query(
+      `SELECT
+        public_id,
+        resource_type,
+        format,
+        secure_url,
+        url,
+        bytes,
+        created_at,
+        region_id,
+        title,
+        media_type AS type,
+        description,
+        caption
+      FROM media_uploads
+      WHERE resource_type = 'image'
+        AND ($1::uuid IS NULL OR region_id = $1::uuid)
+        AND ($2 = '' OR COALESCE(title, '') ILIKE '%' || $2 || '%' OR COALESCE(description, '') ILIKE '%' || $2 || '%' OR COALESCE(caption, '') ILIKE '%' || $2 || '%')
+      ORDER BY created_at DESC`,
+      [region_id || null, search]
+    );
 
-    const assets = Array.isArray(result.resources)
-      ? result.resources.map(mapCloudinaryAsset)
-      : [];
+    const assets = result.rows;
 
     return res.json({
       ok: true,
       assets,
-      next_cursor: result.next_cursor || null
+      next_cursor: null
     });
   } catch (err) {
     console.error(err);
@@ -152,7 +196,7 @@ router.post(
         folder
       });
 
-      const { church_id, caption, location_link, expires_in_days } = req.body;
+      const { church_id, title, type, description, caption, location_link, expires_in_days } = req.body;
       if (church_id && !regionId) {
         return res.status(400).json({ error: 'church_id requires region_id' });
       }
@@ -174,13 +218,16 @@ router.post(
         galleryId = uuidv4();
         await db.query(
           `INSERT INTO region_galleries(
-            id,author_id,region_id,church_id,caption,image_url,location_link,expires_at,created_at
-          ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,NOW())`,
+            id,author_id,region_id,church_id,title,type,description,caption,image_url,location_link,expires_at,created_at
+          ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())`,
           [
             galleryId,
             req.user.id,
             regionId,
             church_id || null,
+            title || null,
+            type || null,
+            description || null,
             caption || null,
             result.secure_url,
             location_link || null,
@@ -188,6 +235,18 @@ router.post(
           ]
         );
       }
+
+      await saveMediaUploadMetadata({
+        uploaderId: req.user?.id,
+        regionId,
+        churchId: church_id || null,
+        resourceType: 'image',
+        title,
+        type,
+        description,
+        caption,
+        cloudinaryResult: result
+      });
 
       return res.json({
         ok: true,
@@ -200,7 +259,10 @@ router.post(
           url: result.url,
           bytes: result.bytes,
           created_at: result.created_at,
-          region_id: regionId
+          region_id: regionId,
+          title: title || null,
+          type: type || null,
+          description: description || null
         }
       });
     } catch (err) {
@@ -222,10 +284,29 @@ router.post(
       if (!file) return res.status(400).json({ error: 'Missing file in form-data body' });
       if (!file.mimetype.startsWith('video/')) return res.status(400).json({ error: 'Only video files are allowed' });
 
-      const folder = req.body.folder || 'mission-for-nation/videos';
+      const regionId = req.query.region_id || req.headers['x-region-id'] || req.headers['region_id'];
+      const regionValidation = await validateRegionForUpload(req.user, regionId);
+      if (!regionValidation.ok) {
+        return res.status(regionValidation.status).json({ error: regionValidation.error });
+      }
+
+      const folder = req.body.folder || (regionId ? `mission-for-nation/videos/${regionId}` : 'mission-for-nation/videos/home');
       const result = await uploadBufferToCloudinary(file.buffer, {
         resource_type: 'video',
         folder
+      });
+
+      const { title, type, description, caption } = req.body;
+      await saveMediaUploadMetadata({
+        uploaderId: req.user?.id,
+        regionId,
+        churchId: null,
+        resourceType: 'video',
+        title,
+        type,
+        description,
+        caption,
+        cloudinaryResult: result
       });
 
       return res.json({
@@ -237,7 +318,11 @@ router.post(
           secure_url: result.secure_url,
           url: result.url,
           bytes: result.bytes,
-          created_at: result.created_at
+          created_at: result.created_at,
+          region_id: regionId || null,
+          title: title || null,
+          type: type || null,
+          description: description || null
         }
       });
     } catch (err) {

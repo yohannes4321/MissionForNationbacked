@@ -13,6 +13,43 @@ function buildAcceptInviteUrl(token) {
   return `${base}/accept-invite?token=${token}`;
 }
 
+function mapInviteError(err) {
+  if (!err)
+    return {
+      status: 500,
+      error: "Server error",
+      code: "UNKNOWN",
+      detail: null,
+    };
+  if (err.code === "23503") {
+    return {
+      status: 400,
+      error: "Invalid region_id",
+      code: err.code,
+      detail: err.message || null,
+    };
+  }
+  return {
+    status: 500,
+    error: "Failed to send invitation email.",
+    code: err.code || "EMAIL_ERROR",
+    detail: err.message || null,
+  };
+}
+
+function logInviteContext(req, details = {}) {
+  console.log("[INVITE] /send request", {
+    method: req.method,
+    path: req.originalUrl,
+    by_user_id: req.user && req.user.id,
+    by_role: req.user && req.user.role,
+    email: details.email,
+    role: details.role,
+    region_id: details.region_id,
+    ip: req.ip,
+  });
+}
+
 // Send invitation (super user)
 router.post("/send", authRequired, requireRole("super"), async (req, res) => {
   const { email, role, region_id } = req.body;
