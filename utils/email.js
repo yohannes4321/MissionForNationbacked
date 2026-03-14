@@ -14,16 +14,16 @@ function unquoteEnv(value) {
   return str;
 }
 
+// Configuration Parsing
 const smtpHost = unquoteEnv(process.env.SMTP_HOST);
 const smtpUser = unquoteEnv(process.env.SMTP_USER);
 const smtpFrom = unquoteEnv(process.env.SMTP_FROM);
 const requestedSmtpPort = Number(unquoteEnv(process.env.SMTP_PORT) || 587);
 const allowPort25 = unquoteEnv(process.env.SMTP_ALLOW_PORT_25).toLowerCase() === 'true';
 
-// Most cloud providers block outbound port 25 by default; prefer 587 unless explicitly allowed.
 const smtpPort = requestedSmtpPort === 25 && !allowPort25 ? 587 : requestedSmtpPort;
 if (requestedSmtpPort === 25 && !allowPort25) {
-  console.warn('[SMTP] Port 25 requested but blocked by default on many cloud platforms; using 587 instead');
+  console.warn('[SMTP] Port 25 requested but blocked by default; using 587 instead');
 }
 
 const smtpSecure =
@@ -35,38 +35,45 @@ const tlsRejectUnauthorized =
   process.env.SMTP_TLS_REJECT_UNAUTHORIZED !== undefined
     ? unquoteEnv(process.env.SMTP_TLS_REJECT_UNAUTHORIZED).toLowerCase() !== 'false'
     : true;
-const tlsMinVersion = unquoteEnv(process.env.SMTP_TLS_MIN_VERSION) || 'TLSv1.2';
-const smtpFamily = Number(unquoteEnv(process.env.SMTP_FAMILY) || 4);
 
-// Gmail app passwords are often copied with spaces; normalize for transport auth.
+const tlsMinVersion = unquoteEnv(process.env.SMTP_TLS_MIN_VERSION) || 'TLSv1.2';
 const smtpPassword = unquoteEnv(process.env.SMTP_PASS).replace(/\s+/g, '');
 
 console.log('[SMTP] Transport configured', {
   host: smtpHost || '(missing)',
   port: smtpPort,
   secure: smtpSecure,
-  family: smtpFamily,
   has_user: Boolean(smtpUser),
-  has_password: Boolean(smtpPassword),
-  from: smtpFrom || smtpUser || '(missing)',
-  tls_reject_unauthorized: tlsRejectUnauthorized,
-  tls_min_version: tlsMinVersion
+  from: smtpFrom || smtpUser || '(missing)'
 });
 
-function createTransport(port, secure) {
-  const { Resend } = require('resend');
-  const resend = new Resend(process.env.RESEND_API_KEY);
+// Initialize Resend
+const { Resend } = require('resend');
+const resend = new Resend(unquoteEnv(process.env.RESEND_API_KEY));
 
-  async function sendMail({ to, subject, html, text }) {
-    const from = 'onboarding@resend.dev'; // For testing, use Resend's test sender
+/**
+ * sendMail function
+ * Note: Since you are using the Resend SDK, the SMTP variables above 
+ * are mostly for logging/referencing unless you switch to Nodemailer transport.
+ */
+async function sendMail({ to, subject, html, text }) {
+  // Use SMTP_FROM if available, otherwise fallback to Resend default
+  const fromAddress = smtpFrom || 'onboarding@resend.dev';
+
+  try {
     const info = await resend.emails.send({
-      from,
+      from: fromAddress,
       to,
       subject,
       html,
       text
     });
     return info;
+  } catch (error) {
+    console.error('[SMTP] Error sending email:', error);
+    throw error;
+  }
 }
 
+// Export the function so it can be used in other files
 module.exports = { sendMail };
