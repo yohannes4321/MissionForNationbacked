@@ -18,7 +18,15 @@ function mapInviteError(err) {
     return { status: 400, error: 'Invalid region_id' };
   }
 
-  if (err.code === 'EAUTH' || err.code === 'EENVELOPE' || err.code === 'ESOCKET' || err.code === 'ECONNECTION') {
+  if (
+    err.code === 'EAUTH' ||
+    err.code === 'EENVELOPE' ||
+    err.code === 'ESOCKET' ||
+    err.code === 'ECONNECTION' ||
+    err.code === 'ETIMEDOUT' ||
+    err.code === 'ECONNRESET' ||
+    err.code === 'ENOTFOUND'
+  ) {
     return { status: 502, error: 'Failed to send invitation email. Check SMTP configuration.' };
   }
 
@@ -29,6 +37,10 @@ function mapInviteError(err) {
 router.post('/send', authRequired, requireRole('super'), async (req, res) => {
   const { email, role, region_id } = req.body;
   if (!email || !role) return res.status(400).json({ error: 'Missing fields' });
+  const allowedRoles = new Set(['regional_admin', 'user', 'super']);
+  if (!allowedRoles.has(role)) {
+    return res.status(400).json({ error: 'Invalid role' });
+  }
   // require region_id created by a super user (no auto-creation here)
   if (!region_id) {
     return res.status(400).json({ error: 'region_id is required. Create a region via /api/regions as a super user first.' });
@@ -39,15 +51,22 @@ router.post('/send', authRequired, requireRole('super'), async (req, res) => {
   const regionId = region_id;
   const regionName = rr.rows[0].name;
   try {
+    const startedAt = Date.now();
     const token = uuidv4();
     const expires = new Date(Date.now() + 1000 * 60 * 60 * 24 * 7); // 7 days
     const id = uuidv4();
     await db.query('INSERT INTO invitations(id,email,role,region_id,token,expires_at,sent_count,accepted) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [id, email, role, regionId, token, expires, 1, false]);
     const url = buildAcceptInviteUrl(token);
-    await sendMail({ to: email, subject: 'Invitation', html: `<p>You are invited as ${role} in region ${regionName || ''}. Accept: <a href="${url}">${url}</a></p>` });
+    const mailInfo = await sendMail({ to: email, subject: 'Invitation', html: `<p>You are invited as ${role} in region ${regionName || ''}. Accept: <a href="${url}">${url}</a></p>` });
+    console.log('Invite email delivered', {
+      to: email,
+      region_id: regionId,
+      messageId: mailInfo && mailInfo.messageId,
+      duration_ms: Date.now() - startedAt
+    });
     return res.json({ ok: true, token, region_id: regionId, region_name: regionName });
   } catch (err) {
-    console.error(err);
+    console.error('Invite send failed:', err);
     const mapped = mapInviteError(err);
     return res.status(mapped.status).json({ error: mapped.error });
   }
@@ -59,16 +78,23 @@ router.post('/resend', authRequired, requireRole('super'), async (req, res) => {
   if (!invitation_id) return res.status(400).json({ error: 'Missing invitation_id' });
   if (!uuidValidate(invitation_id)) return res.status(400).json({ error: 'invitation_id must be a UUID' });
   try {
+    const startedAt = Date.now();
     const invr = await db.query('SELECT * FROM invitations WHERE id=$1', [invitation_id]);
     if (invr.rowCount !== 1) return res.status(404).json({ error: 'Not found' });
     const inv = invr.rows[0];
     const token = uuidv4();
     await db.query('UPDATE invitations SET token=$1,expires_at=$2,sent_count=sent_count+1 WHERE id=$3', [token, new Date(Date.now() + 1000 * 60 * 60 * 24 * 7), invitation_id]);
     const url = buildAcceptInviteUrl(token);
-    await sendMail({ to: inv.email, subject: 'Invitation (resend)', html: `<p>Accept: <a href="${url}">${url}</a></p>` });
+    const mailInfo = await sendMail({ to: inv.email, subject: 'Invitation (resend)', html: `<p>Accept: <a href="${url}">${url}</a></p>` });
+    console.log('Invite resend email delivered', {
+      to: inv.email,
+      invitation_id,
+      messageId: mailInfo && mailInfo.messageId,
+      duration_ms: Date.now() - startedAt
+    });
     return res.json({ ok: true, token, invitation_url: url });
   } catch (err) {
-    console.error(err);
+    console.error('Invite resend failed:', err);
     const mapped = mapInviteError(err);
     return res.status(mapped.status).json({ error: mapped.error });
   }
