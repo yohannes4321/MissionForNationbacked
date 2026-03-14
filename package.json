@@ -4,8 +4,11 @@
   "private": true,
   "main": "server.js",
   "scripts": {
+    "build": "echo 'No build step required for this Node API'",
     "start": "node server.js",
-    "dev": "nodemon server.js",
+    "dev": "npm run migrate && npm run seed && nodemon server.js",
+    "migrate": "node migrations/run_migrations.js",
+    "start:prod": "npm run migrate && npm run seed && npm run start",
     "seed": "node seed/seed.js"
   },
   "dependencies": {
