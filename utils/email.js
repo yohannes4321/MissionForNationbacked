@@ -26,29 +26,48 @@ const smtpSecure =
 // Gmail app passwords are often copied with spaces; normalize for transport auth.
 const smtpPassword = unquoteEnv(process.env.SMTP_PASS).replace(/\s+/g, '');
 
-const transporter = nodemailer.createTransport({
-  host: smtpHost,
-  port: smtpPort,
-  secure: smtpSecure,
-  connectionTimeout: Number(process.env.SMTP_CONNECTION_TIMEOUT_MS || 10000),
-  greetingTimeout: Number(process.env.SMTP_GREETING_TIMEOUT_MS || 10000),
-  socketTimeout: Number(process.env.SMTP_SOCKET_TIMEOUT_MS || 15000),
-  auth: {
-    user: smtpUser,
-    pass: smtpPassword
-  }
-});
+function createTransport(port, secure) {
+  return nodemailer.createTransport({
+    host: smtpHost,
+    port,
+    secure,
+    connectionTimeout: Number(process.env.SMTP_CONNECTION_TIMEOUT_MS || 10000),
+    greetingTimeout: Number(process.env.SMTP_GREETING_TIMEOUT_MS || 10000),
+    socketTimeout: Number(process.env.SMTP_SOCKET_TIMEOUT_MS || 15000),
+    auth: {
+      user: smtpUser,
+      pass: smtpPassword
+    }
+  });
+}
+
+const primaryTransporter = createTransport(smtpPort, smtpSecure);
 
 async function sendMail({ to, subject, html, text }) {
   const from = smtpFrom || smtpUser;
   try {
-    const info = await transporter.sendMail({ from, to, subject, html, text });
+    const info = await primaryTransporter.sendMail({ from, to, subject, html, text });
     return info;
   } catch (err) {
     // Normalize common network timeout failure shapes so route handlers can map them consistently.
     if (!err.code && /timeout/i.test(String(err.message || ''))) {
       err.code = 'ETIMEDOUT';
     }
+
+    const canRetryWithStartTls = smtpHost === 'smtp.gmail.com' && smtpPort === 465;
+    if (canRetryWithStartTls && (err.code === 'ETIMEDOUT' || err.code === 'ECONNECTION' || err.code === 'ESOCKET')) {
+      try {
+        const fallbackTransporter = createTransport(587, false);
+        const info = await fallbackTransporter.sendMail({ from, to, subject, html, text });
+        return info;
+      } catch (fallbackErr) {
+        if (!fallbackErr.code && /timeout/i.test(String(fallbackErr.message || ''))) {
+          fallbackErr.code = 'ETIMEDOUT';
+        }
+        throw fallbackErr;
+      }
+    }
+
     throw err;
   }
 }
