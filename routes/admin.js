@@ -4,7 +4,7 @@ const db = require('../db');
 const multer = require('multer');
 const { authRequired, requireRole } = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
-const { uploadBufferToCloudinary } = require('../utils/cloudinary');
+const { uploadBufferToCloudinary, cloudinary } = require('../utils/cloudinary');
 
 const ALLOWED_CATEGORIES = ['special_program', 'mission', 'program_sunday'];
 
@@ -380,6 +380,111 @@ router.get('/blogs', async (req, res) => {
   return res.json({ blogs: r.rows });
 });
 
+// Update blog post (super only)
+router.put('/blogs/:blogId', authRequired, requireRole('super'), requireCloudinaryConfig, runMulter(anyUploadField), async (req, res) => {
+  try {
+    const { blogId } = req.params;
+    const { text, image_url: imageUrlFromBody, video_url: videoUrlFromBody, expires_in_days } = req.body;
+
+    const existing = await db.query('SELECT * FROM blogs WHERE id=$1', [blogId]);
+    if (existing.rowCount === 0) return res.status(404).json({ error: 'Blog not found' });
+
+    const { imageFile, videoFile } = getUploadedMediaFiles(req);
+
+    let imageUrl = imageUrlFromBody || existing.rows[0].image_url;
+    let videoUrl = videoUrlFromBody || existing.rows[0].video_url;
+
+    if (imageFile) {
+      const imageUpload = await uploadBufferToCloudinary(imageFile.buffer, {
+        resource_type: 'image',
+        folder: 'mission-for-nation/home/blogs/images'
+      });
+      imageUrl = imageUpload.secure_url;
+      
+      // Optionally delete old image from Cloudinary
+      if (existing.rows[0].image_url) {
+        try {
+          const oldPublicId = existing.rows[0].image_url.split('/').pop().split('.')[0];
+          await cloudinary.uploader.destroy(`mission-for-nation/home/blogs/images/${oldPublicId}`);
+        } catch (err) {
+          console.warn('Failed to delete old image from Cloudinary:', err);
+        }
+      }
+    }
+
+    if (videoFile) {
+      const videoUpload = await uploadBufferToCloudinary(videoFile.buffer, {
+        resource_type: 'video',
+        folder: 'mission-for-nation/home/blogs/videos'
+      });
+      videoUrl = videoUpload.secure_url;
+      
+      // Optionally delete old video from Cloudinary
+      if (existing.rows[0].video_url) {
+        try {
+          const oldPublicId = existing.rows[0].video_url.split('/').pop().split('.')[0];
+          await cloudinary.uploader.destroy(`mission-for-nation/home/blogs/videos/${oldPublicId}`);
+        } catch (err) {
+          console.warn('Failed to delete old video from Cloudinary:', err);
+        }
+      }
+    }
+
+    if (!imageUrl && !videoUrl) {
+      return res.status(400).json({ error: 'Provide at least one media URL: image_url or video_url' });
+    }
+
+    const expiresAt = parseExpiryDate(expires_in_days);
+    if (expiresAt === undefined) return res.status(400).json({ error: 'expires_in_days must be a positive number' });
+
+    await db.query(
+      'UPDATE blogs SET text=$1, image_url=$2, video_url=$3, expires_at=$4, updated_at=NOW() WHERE id=$5',
+      [text !== undefined ? text : existing.rows[0].text, imageUrl, videoUrl, expiresAt, blogId]
+    );
+
+    const updated = await db.query('SELECT id, text, image_url, video_url, created_at, expires_at, updated_at FROM blogs WHERE id=$1', [blogId]);
+    return res.json({ ok: true, blog: updated.rows[0] });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to update blog' });
+  }
+});
+
+// Delete blog post (super only)
+router.delete('/blogs/:blogId', authRequired, requireRole('super'), async (req, res) => {
+  try {
+    const { blogId } = req.params;
+
+    const existing = await db.query('SELECT * FROM blogs WHERE id=$1', [blogId]);
+    if (existing.rowCount === 0) return res.status(404).json({ error: 'Blog not found' });
+
+    // Delete associated media from Cloudinary
+    if (existing.rows[0].image_url) {
+      try {
+        const publicId = existing.rows[0].image_url.split('/').pop().split('.')[0];
+        await cloudinary.uploader.destroy(`mission-for-nation/home/blogs/images/${publicId}`);
+      } catch (err) {
+        console.warn('Failed to delete image from Cloudinary:', err);
+      }
+    }
+
+    if (existing.rows[0].video_url) {
+      try {
+        const publicId = existing.rows[0].video_url.split('/').pop().split('.')[0];
+        await cloudinary.uploader.destroy(`mission-for-nation/home/blogs/videos/${publicId}`);
+      } catch (err) {
+        console.warn('Failed to delete video from Cloudinary:', err);
+      }
+    }
+
+    await db.query('DELETE FROM blogs WHERE id=$1', [blogId]);
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to delete blog' });
+  }
+});
+
 // Create post (super or regional admin)
 router.post('/posts', authRequired, async (req, res) => {
   const {
@@ -606,6 +711,158 @@ router.get('/galleries/all', async (req, res) => {
   );
 
   return res.json({ galleries: result.rows });
+});
+
+// Church Gallery Management Routes
+
+// Get gallery images for a church
+router.get('/churches/:churchId/gallery', async (req, res) => {
+  try {
+    const { churchId } = req.params;
+    const church = await getChurchById(churchId);
+    if (!church) return res.status(404).json({ error: 'Church not found' });
+
+    return res.json({ gallery: church.gallery || [] });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to get gallery' });
+  }
+});
+
+// Upload gallery image for a church
+router.post('/churches/:churchId/gallery/upload', 
+  authRequired, 
+  requireRole('super', 'regional_admin'),
+  requireCloudinaryConfig,
+  runMulter(anyUploadField),
+  async (req, res) => {
+  try {
+    const { churchId } = req.params;
+    const { caption } = req.body;
+
+    const church = await getChurchById(churchId);
+    if (!church) return res.status(404).json({ error: 'Church not found' });
+
+    if (req.user.role === 'regional_admin') {
+      const allowedRegion = await userCanPostToRegion(req.user.id, church.region_id);
+      if (!allowedRegion) return res.status(403).json({ error: 'Forbidden for this region' });
+    }
+
+    const file = getSingleUploadedFile(req);
+    if (!file) return res.status(400).json({ error: 'Missing image file' });
+    if (!file.mimetype.startsWith('image/')) return res.status(400).json({ error: 'Only image files are allowed' });
+
+    const folder = `mission-for-nation/churches/${churchId}`;
+    const result = await uploadBufferToCloudinary(file.buffer, {
+      resource_type: 'image',
+      folder
+    });
+
+    const galleryItem = {
+      id: uuidv4(),
+      image_url: result.secure_url,
+      caption: caption || null,
+      uploaded_at: new Date().toISOString()
+    };
+
+    const currentGallery = church.gallery || [];
+    const updatedGallery = [...currentGallery, galleryItem];
+
+    await db.query('UPDATE churches SET gallery = $1::jsonb, updated_at = NOW() WHERE id = $2', 
+      [JSON.stringify(updatedGallery), churchId]);
+
+    return res.json({ 
+      ok: true, 
+      image: galleryItem,
+      gallery: updatedGallery
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to upload gallery image' });
+  }
+});
+
+// Update gallery image caption
+router.patch('/churches/:churchId/gallery/:imageId', 
+  authRequired, 
+  requireRole('super', 'regional_admin'), 
+  async (req, res) => {
+  try {
+    const { churchId, imageId } = req.params;
+    const { caption } = req.body;
+
+    const church = await getChurchById(churchId);
+    if (!church) return res.status(404).json({ error: 'Church not found' });
+
+    if (req.user.role === 'regional_admin') {
+      const allowedRegion = await userCanPostToRegion(req.user.id, church.region_id);
+      if (!allowedRegion) return res.status(403).json({ error: 'Forbidden for this region' });
+    }
+
+    const currentGallery = church.gallery || [];
+    const imageIndex = currentGallery.findIndex(item => item.id === imageId);
+    if (imageIndex === -1) return res.status(404).json({ error: 'Gallery image not found' });
+
+    currentGallery[imageIndex].caption = caption;
+
+    await db.query('UPDATE churches SET gallery = $1::jsonb, updated_at = NOW() WHERE id = $2', 
+      [JSON.stringify(currentGallery), churchId]);
+
+    return res.json({ 
+      ok: true, 
+      image: currentGallery[imageIndex],
+      gallery: currentGallery
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to update gallery image' });
+  }
+});
+
+// Delete gallery image
+router.delete('/churches/:churchId/gallery/:imageId', 
+  authRequired, 
+  requireRole('super', 'regional_admin'), 
+  async (req, res) => {
+  try {
+    const { churchId, imageId } = req.params;
+
+    const church = await getChurchById(churchId);
+    if (!church) return res.status(404).json({ error: 'Church not found' });
+
+    if (req.user.role === 'regional_admin') {
+      const allowedRegion = await userCanPostToRegion(req.user.id, church.region_id);
+      if (!allowedRegion) return res.status(403).json({ error: 'Forbidden for this region' });
+    }
+
+    const currentGallery = church.gallery || [];
+    const imageIndex = currentGallery.findIndex(item => item.id === imageId);
+    if (imageIndex === -1) return res.status(404).json({ error: 'Gallery image not found' });
+
+    const deletedImage = currentGallery.splice(imageIndex, 1)[0];
+    const updatedGallery = currentGallery;
+
+    await db.query('UPDATE churches SET gallery = $1::jsonb, updated_at = NOW() WHERE id = $2', 
+      [JSON.stringify(updatedGallery), churchId]);
+
+    // Optionally delete from Cloudinary
+    try {
+      const publicId = deletedImage.image_url.split('/').pop().split('.')[0];
+      const folder = `mission-for-nation/churches/${churchId}`;
+      await cloudinary.uploader.destroy(`${folder}/${publicId}`);
+    } catch (cloudinaryErr) {
+      console.warn('Failed to delete image from Cloudinary:', cloudinaryErr);
+    }
+
+    return res.json({ 
+      ok: true, 
+      deleted_image: deletedImage,
+      gallery: updatedGallery
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to delete gallery image' });
+  }
 });
 
 module.exports = router;
