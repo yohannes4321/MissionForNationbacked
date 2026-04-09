@@ -152,7 +152,7 @@ router.post(
         folder
       });
 
-      const { church_id, caption, location_link, expires_in_days } = req.body;
+      const { church_id, title, type, description, caption, location_link, expires_in_days } = req.body;
       if (church_id && !regionId) {
         return res.status(400).json({ error: 'church_id requires region_id' });
       }
@@ -174,13 +174,16 @@ router.post(
         galleryId = uuidv4();
         await db.query(
           `INSERT INTO region_galleries(
-            id,author_id,region_id,church_id,caption,image_url,location_link,expires_at,created_at
-          ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,NOW())`,
+            id,author_id,region_id,church_id,title,type,description,caption,image_url,location_link,expires_at,created_at
+          ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())`,
           [
             galleryId,
             req.user.id,
             regionId,
             church_id || null,
+            title || null,
+            type || null,
+            description || null,
             caption || null,
             result.secure_url,
             location_link || null,
