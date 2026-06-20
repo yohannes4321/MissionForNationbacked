@@ -1,40 +1,22 @@
 const { Resend } = require('resend');
-const resend = new Resend(process.env.RESEND_API_KEY);
 
-async function sendMail({ to, subject, html, text }) {
-  const from = 'onboarding@resend.dev'; // For testing, use Resend's test sender
-  const info = await resend.emails.send({
-    from,
-    to,
-    subject,
-    html,
-    text
-  });
-  return info;
+// Helper to remove surrounding quotes if present
+function unquoteEnv(value) {
+  if (typeof value === 'string' && value.startsWith('"') && value.endsWith('"')) {
+    return value.slice(1, -1);
+  }
+  return value;
 }
 
-module.exports = { sendMail };
-
-console.log('[SMTP] Transport configured', {
-  host: smtpHost || '(missing)',
-  port: smtpPort,
-  secure: smtpSecure,
-  has_user: Boolean(smtpUser),
-  from: smtpFrom || smtpUser || '(missing)'
-});
-
-// Initialize Resend
-const { Resend } = require('resend');
 const resend = new Resend(unquoteEnv(process.env.RESEND_API_KEY));
 
 /**
  * sendMail function
- * Note: Since you are using the Resend SDK, the SMTP variables above 
- * are mostly for logging/referencing unless you switch to Nodemailer transport.
+ * Note: Uses the Resend SDK for sending emails.
  */
 async function sendMail({ to, subject, html, text }) {
   // Use SMTP_FROM if available, otherwise fallback to Resend default
-  const fromAddress = smtpFrom || 'onboarding@resend.dev';
+  const fromAddress = unquoteEnv(process.env.SMTP_FROM) || 'onboarding@resend.dev';
 
   try {
     const info = await resend.emails.send({
